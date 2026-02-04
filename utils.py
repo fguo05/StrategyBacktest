@@ -1,3 +1,5 @@
+import os
+
 import pymysql
 import requests
 from datetime import datetime, timedelta, timezone
@@ -181,13 +183,14 @@ def get_yfinance_data(symbol, start, end):
     return df
 
 
-def get_binance_data(symbol, start, end):
+def get_binance_data(symbol, start, timeframe):
+    """美国地区限制"""
     exchange = ccxt.binance()
 
     ohlcv = exchange.fetch_ohlcv(
         symbol=symbol,
-        timeframe='1h',
-        since=exchange.parse8601('2020-01-01T00:00:00Z')
+        timeframe=timeframe,
+        since=exchange.parse8601(start)
     )
 
     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -196,20 +199,30 @@ def get_binance_data(symbol, start, end):
     return df
 
 
-def get_okx_data(symbol, start, end):
-    # 1️⃣ 初始化 OKX
-    exchange = ccxt.okx({'enableRateLimit': True,})
+def get_okx_data(symbol:str, start:str, timeframe:str, asset_type:str="spot"):
+    """
+    获取 OKX 数据
+    注意：OKX 用的时间都是 UTC！！！
+    :param symbol: "BTC"/"ETH"
+    :param start: 起始时间，UTC（e.g.'2020-01-01T00:00:00Z'）
+    :param timeframe: 时间精度，支持1m/5m/15m/30m/1h/4h/1d/1w
+    :param asset_type: "spot"/"perp"/"coin_margined"
+    :return: pd.Dataframe
+    """
+    symbol_okx = OKX_SYMBOL_MAP[asset_type][symbol] if symbol in OKX_SYMBOL_MAP[asset_type] else symbol
+
+    exchange = ccxt.okx({'enableRateLimit': True,}) # It prevents the client from sending too many requests in a short period, avoiding bans or IP blocks.
+
+    since = exchange.parse8601(start)
+    limit = 100 # OKX 单次最大一般是 100
 
     all_ohlcv = []
 
-    since = exchange.parse8601('2020-01-01T00:00:00Z')
-    limit = 100 # OKX 单次最大一般是 100
-
-    # 3️⃣ 分批拉取
+    # 分批拉取
     while True:
         ohlcv = exchange.fetch_ohlcv(
-            symbol=symbol,
-            timeframe='1h',
+            symbol=symbol_okx,
+            timeframe=timeframe,
             since=since,
             limit=limit
         )
@@ -226,13 +239,37 @@ def get_okx_data(symbol, start, end):
         if len(ohlcv) < limit:
             break
 
-    # 4️⃣ 转成 DataFrame
+    # 转成 DataFrame
     df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
     df = df.drop_duplicates(subset='timestamp').set_index('timestamp')
 
+    # UTC——>美东时间，和新闻时间对齐
+    # df = df.tz_convert('US/Eastern')
+
+    # 写入csv文件
+    data_dir = "data"
+    os.makedirs(data_dir, exist_ok=True)
+    df.to_csv(os.path.join(data_dir, f"okx_{symbol}_{start.replace(":", "-")}_{timeframe}.csv"))
+
     return df
+
+
+def load_ohlcv_csv(path):
+    """
+    读取 csv 历史 OHLCV 数据
+    注意：数据timestamp为UTC！！！
+    """
+    df = pd.read_csv(path)
+
+    df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
+    df = df.set_index('timestamp')
+
+    df = df.sort_index()
+    df = df[~df.index.duplicated(keep='first')]
+
+    return df
+
 
 def get_daily_signal(conn, symbol, cur_date):
     """

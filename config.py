@@ -62,3 +62,20 @@ YFINANCE_TICKER_MAP = {
     "GBP": "FOREX:GBP",
     "CNY": "FOREX:CNY",
 }
+
+OKX_SYMBOL_MAP = {
+    # 现货（spot）
+    "spot": {
+        "BTC": "BTC/USDT",
+        "ETH": "ETH/USDT",
+    },
+    # 永续合约（Perpetual Swap）
+    "perp": {
+        "BTC": "BTC/USDT:USDT",
+        "ETH": "ETH/USDT:USDT",
+    },
+    # 币本位永续
+    "coin_margined": {
+        "BTC": "BTC/USD:BTC",
+    },
+}
