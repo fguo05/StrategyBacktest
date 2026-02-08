@@ -11,7 +11,21 @@ import pandas as pd
 from config import *
 
 
+_config = None # 配置全局变量，不要直接用DEFAULT_CONFIG
+
+def get_config():
+    global _config
+    if _config is None:
+        _config = DEFAULT_CONFIG.copy()
+    return _config.copy()
+
+
 def create_db_connection(db_name):
+    """
+    建立数据库连接
+    :param db_name: "real"实盘数据库，"test"测试数据库
+    :return: Connection
+    """
     if db_name not in ["real", "test"]:
         print("数据库名错误！")
         return None
