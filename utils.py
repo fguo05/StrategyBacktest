@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import yfinance as yf
 import ccxt
 import pandas as pd
+import openai
 
 from config import *
 
@@ -40,10 +41,8 @@ def create_db_connection(db_name):
     )
 
 
-def get_stock_news(ticker: str, cur_date:str=None, topics: str = None) -> list:
-    """
-    cur_date为空则默认以今天为 to_time 获取24h新闻
-    """
+def get_alphavantage_news(ticker: str, cur_date:str=None, topics: str = None) -> list:
+    """cur_date为空则默认以今天为 to_time 获取24h新闻"""
 
     if ticker in ALPHAVANTAGE_TICKER_MAP:
         ticker = ALPHAVANTAGE_TICKER_MAP[ticker]
@@ -160,19 +159,19 @@ def get_sentiment_from_db_by_url(conn, symbol: str, url: str):
 def trading_decision(score):
     """根据情感分数得到交易信号"""
     if score > 0.3:
-        print("*** 开多仓 ***")
+        # print("*** 开多仓 ***")
         return 2
     elif 0.2 < score <= 0.3:
-        print("*** 清空空仓 ***")
+        # print("*** 清空空仓 ***")
         return 1
     elif -0.2 <= score <= 0.2:
-        print("*** 不动 ***")
+        # print("*** 不动 ***")
         return 0
     elif -0.3 <= score <-0.2:
-        print("*** 清空多仓 ***")
+        # print("*** 清空多仓 ***")
         return -1
     elif score<-0.3:
-        print("*** 开空仓 ***")
+        # print("*** 开空仓 ***")
         return -2
 
 
@@ -213,7 +212,7 @@ def get_binance_data(symbol, start, timeframe):
     return df
 
 
-def get_okx_data(symbol:str, start:str, timeframe:str, asset_type:str="spot"):
+def get_okx_data(symbol:str, start:str, timeframe:str, asset_type:str="perp"):
     """
     获取 OKX 数据
     注意：OKX 用的时间都是 UTC！！！
@@ -285,32 +284,150 @@ def load_ohlcv_csv(path):
     return df
 
 
-def get_daily_signal(conn, symbol, cur_date):
+def classify_sentiment(company_name, headline, strategy):
     """
-    根据给定 symbol+日期 ，获取当日交易信号
-    注意：当前是获取title的分，且如果数据库没有该分则跳过（数据库中有的新闻该字段为Null）
-    :return: (score, signal)
+    openai 新闻打分
+    :param company_name:
+    :param headline:
+    :param strategy:
+    :return:
+    """
+    client = openai.OpenAI(api_key=OPENAI_API_KEY)
+
+    if strategy not in ["title-only", "title+content"]:
+        print("策略输入错误！")
+        return None
+
+    if strategy == "title-only":
+        prompt = f"""
+        Forget all your previous instructions. Pretend you are a financial expert.
+        You are a financial expert with stock recommendation experience.
+        Answer "YES" if good news, "NO" if bad news, or "UNKNOWN" if uncertain in the first line.
+        Then elaborate with one short and concise sentence on the next line.
+        Is this headline good or bad for the stock price of {company_name} in the short term?
+
+        Headline: {headline}
+        """
+    else:
+        prompt = f"""
+        Forget all your previous instructions. Pretend you are a financial expert.
+        You are a financial expert with stock recommendation experience.
+        Answer "YES" if good news, "NO" if bad news, or "UNKNOWN" if uncertain in the first line.
+        Then elaborate with one short and concise sentence on the next line.
+        Is this newspiece good or bad for the stock price of {company_name} in the short term?
+
+        {headline}
+        """
+
+    messages = [{"role": "user", "content": prompt}]
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=messages,
+        temperature=0
+    )
+
+    content = response.choices[0].message.content.strip()
+    return content
+
+
+def process_openai_report(report:str):
+    """处理openai返回结果"""
+    parts = report.split('\n', 1)
+    label = parts[0].strip().upper()
+    explanation = parts[1].strip() if len(parts) > 1 else ''
+
+    # 映射 label ——> 分数
+    if label == "YES":
+        score = 1.0
+    elif label == "NO":
+        score = -1.0
+    else:
+        score = 0.0
+
+    return explanation, score
+
+
+def get_daily_signal(conn, symbol:str, cur_date:str):
+    """
+    根据 symbol+日期 ，获取当日交易信号
+    :param conn: Connection
+    :param symbol: 格式"BTC""ETH"...
+    :param cur_date: str
+    :return: 若新闻数量<20条，返回None，否则返回字典
+    {
+        "title": {
+            "score": title_score,
+            "signal": title_signal
+        },
+        "title_content": {
+            "score": title_content_score,
+            "signal": title_content_signal
+        }
+    }
     """
 
     # 获取AlphaVantage新闻
-    news_list = get_stock_news(symbol, cur_date)
+    news_list = get_alphavantage_news(symbol, cur_date)
 
-    # 数据库获取新闻情感分
-    scores = []
+    len_news_list = len(news_list)
+
+    if len_news_list < 20:
+        print(f"{cur_date}新闻数量仅{len_news_list}条，不做处理！")
+        return None
+
+    print(f"{cur_date}共获取到{len_news_list}条新闻。")
+
+    # 从数据库获取新闻情感分
+    title_scores, title_content_scores = [], []
+
     for news in news_list:
         result = get_sentiment_from_db_by_url(conn, symbol, news["url"])
 
-        if not result or not result["sentiment_score"]:
-            continue
+        # 分数存在于数据库则直接用，否则 openai 打分
+        # 1. Title-Only
+        if not result or result["sentiment_score"] is None:
+            headline = news['title']
+            raw_sentiment = classify_sentiment(symbol, headline, "title-only")
 
-        scores.append(float(result["sentiment_score"]))
+            # 处理 openai 分析结果
+            _, score = process_openai_report(raw_sentiment)
+            title_scores.append(score)
+        else:
+            title_scores.append(float(result["sentiment_score"]))
 
-    if not scores:
-        print(f"{cur_date} 没有新闻分数！")
-        return None
+        # 2. Title-Content
+        if not result or result["sentiment_score_title_content"] is None:
+            newspiece = f"News title: {news['title']}\nNews content: {news['content']}"
+            raw_sentiment = classify_sentiment(symbol, newspiece, "title+content")
 
-    # 计算平均分、信号
-    score = sum(scores)/len(scores)
-    signal = trading_decision(score)
+            # 处理 openai 分析结果
+            _, score = process_openai_report(raw_sentiment)
+            title_content_scores.append(score)
+        else:
+            title_content_scores.append(float(result["sentiment_score_title_content"]))
 
-    return score, signal
+    # 计算 score、signal
+    if not title_scores:
+        print(f"{cur_date} 没有Title-Only新闻分数！")
+        title_score = title_signal = None
+    else:
+        title_score = sum(title_scores) / len(title_scores)
+        title_signal = trading_decision(title_score)
+
+    if not title_content_scores:
+        print(f"{cur_date} 没有Title-Content新闻分数！")
+        title_content_score = title_content_signal = None
+    else:
+        title_content_score = sum(title_content_scores) / len(title_content_scores)
+        title_content_signal = trading_decision(title_content_score)
+
+    return {
+        "title": {
+            "score": title_score,
+            "signal": title_signal
+        },
+        "title_content": {
+            "score": title_content_score,
+            "signal": title_content_signal
+        }
+    }
