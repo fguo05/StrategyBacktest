@@ -80,3 +80,18 @@ OKX_SYMBOL_MAP = {
         "BTC": "BTC/USD:BTC",
     },
 }
+
+BACKTEST_CONFIG = {
+    'start_date': '2025-07-01',
+    'end_date': '2025-08-01',
+    'initial_capital': 10000.0,
+    'symbols': ['BTC'],
+    'trade_time': '11:00',
+    'interval': '15m',
+    'leverage': {'BTC': 3},
+    'stop_loss_pct': 0.01,
+    'take_profit_pct': 0.01,
+    'capital_allocation': {'BTC': 1.0},
+    'consecutive_loss_limit': 4,
+    'pause_days': 7,
+}

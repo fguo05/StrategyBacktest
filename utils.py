@@ -158,19 +158,19 @@ def get_sentiment_from_db_by_url(conn, symbol: str, url: str):
 
 def trading_decision(score):
     """根据情感分数得到交易信号"""
-    if score > 0.3:
+    if score >= 0.25:
         # print("*** 开多仓 ***")
         return 2
-    elif 0.2 < score <= 0.3:
-        # print("*** 清空空仓 ***")
-        return 1
-    elif -0.2 <= score <= 0.2:
+    elif 0.2 < score < 0.25:
         # print("*** 不动 ***")
+        return 1
+    elif -0.18 <= score <= 0.2:
+        # print("*** 有则清仓 ***")
         return 0
-    elif -0.3 <= score <-0.2:
-        # print("*** 清空多仓 ***")
+    elif -0.23 < score <-0.18:
+        # print("*** 不动 ***")
         return -1
-    elif score<-0.3:
+    elif score<=-0.23:
         # print("*** 开空仓 ***")
         return -2
 
@@ -263,7 +263,7 @@ def get_okx_data(symbol:str, start:str, timeframe:str, asset_type:str="perp"):
     # 写入csv文件
     data_dir = "data"
     os.makedirs(data_dir, exist_ok=True)
-    df.to_csv(os.path.join(data_dir, f"okx_{symbol}_{start.replace(":", "-")}_{timeframe}.csv"))
+    df.to_csv(os.path.join(data_dir, f"okx_{symbol}_{start.replace(':', '-')}_{timeframe}.csv"))
 
     return df
 
@@ -292,7 +292,7 @@ def classify_sentiment(company_name, headline, strategy):
     :param strategy:
     :return:
     """
-    client = openai.OpenAI(api_key=OPENAI_API_KEY)
+    client = openai.OpenAI(api_key="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")
 
     if strategy not in ["title-only", "title+content"]:
         print("策略输入错误！")
